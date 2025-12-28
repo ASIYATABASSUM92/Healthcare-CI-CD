@@ -1,0 +1,196 @@
+# KUBERNETES DEPLOYMENT CONFIGURATION
+# 
+# PURPOSE: Defines how to run healthcare application in Kubernetes
+#
+# WHAT IT DOES:
+# 1. Creates multiple replicas (copies) of the app
+# 2. Manages pod lifecycle
+# 3. Ensures desired state is maintained
+# 4. Handles rolling updates
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Name of this deployment
+  name: healthcare-deployment
+  labels:
+    app: healthcare
+    version: v1.0.0
+    tier: frontend
+
+spec:
+  # HOW MANY COPIES
+  # WHY: High availability + load distribution
+  replicas: 3
+  
+  # SELECTOR
+  # WHY: Tells deployment which pods it manages
+  selector:
+    matchLabels:
+      app: healthcare
+  
+  # UPDATE STRATEGY
+  # WHY: Zero-downtime deployments
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # Max 1 extra pod during update
+      maxUnavailable: 0  # Keep all pods running during update
+  
+  # POD TEMPLATE
+  # WHY: Defines what each pod should look like
+  template:
+    metadata:
+      labels:
+        app: healthcare
+        version: v1.0.0
+    
+    spec:
+      # CONTAINERS IN POD
+      containers:
+      - name: healthcare-app
+        # Docker image to use
+        # IMPORTANT: Use your actual image name/tag
+        image: healthcare-app:1.0.0
+        
+        # IMAGE PULL POLICY
+        # IfNotPresent = Use local image if exists
+        # Always = Always pull from registry
+        # Never = Never pull, must exist locally
+        imagePullPolicy: IfNotPresent
+        
+        # PORTS
+        # WHY: Tells K8s which port app listens on
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        # RESOURCE LIMITS
+        # WHY: Prevent one pod from consuming all resources
+        resources:
+          requests:
+            # Minimum guaranteed resources
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            # Maximum allowed resources
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # HEALTH CHECKS
+        # WHY: Kubernetes can detect and restart unhealthy pods
+        
+        # Liveness Probe: Is container alive?
+        # If fails: K8s restarts container
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 60  # Wait 60s before first check
+          periodSeconds: 10        # Check every 10s
+          timeoutSeconds: 5        # 5s timeout
+          failureThreshold: 3      # Restart after 3 failures
+        
+        # Readiness Probe: Is container ready to serve traffic?
+        # If fails: K8s stops sending traffic (but doesn't restart)
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        # ENVIRONMENT VARIABLES
+        # WHY: Configure app without rebuilding image
+        env:
+        - name: JAVA_OPTS
+          value: "-Xmx256m -Xms128m"
+        - name: TZ
+          value: "UTC"
+        - name: APP_VERSION
+          value: "1.0.0"
+      
+      # RESTART POLICY
+      # WHY: What to do when container exits
+      restartPolicy: Always
+
+---
+# KUBERNETES SERVICE CONFIGURATION
+#
+# PURPOSE: Exposes the application to the network
+#
+# WHAT IT DOES:
+# 1. Load balances traffic across pods
+# 2. Provides stable IP/DNS name
+# 3. Exposes app externally (via NodePort)
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthcare-service
+  labels:
+    app: healthcare
+
+spec:
+  # SERVICE TYPE
+  # ClusterIP: Only accessible within cluster
+  # NodePort: Accessible from outside via node IP:port
+  # LoadBalancer: Cloud load balancer (AWS ELB, etc.)
+  type: NodePort
+  
+  # SELECTOR
+  # WHY: Which pods should receive traffic
+  selector:
+    app: healthcare
+  
+  # PORTS
+  ports:
+  - name: http
+    protocol: TCP
+    port: 8080        # Service port (internal)
+    targetPort: 8080  # Container port
+    nodePort: 30090   # External port (30000-32767 range)
+  
+  # SESSION AFFINITY
+  # WHY: Stick user to same pod (for sessions)
+  sessionAffinity: ClientIP
+
+---
+# HORIZONTAL POD AUTOSCALER (OPTIONAL)
+#
+# PURPOSE: Automatically scale pods based on CPU/memory
+#
+# WHY: Handle traffic spikes automatically
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: healthcare-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: healthcare-deployment
+  
+  # MIN/MAX REPLICAS
+  minReplicas: 2   # Always keep at least 2 running
+  maxReplicas: 10  # Never exceed 10 pods
+  
+  # SCALING METRICS
+  # WHY: When to scale up/down
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # Scale up if CPU > 70%
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80  # Scale up if memory > 80%
